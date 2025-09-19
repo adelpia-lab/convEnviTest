@@ -14,6 +14,70 @@ import { InterByteTimeoutParser } from 'serialport';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// 파일 경로 상수
+const PRODUCT_INPUT_FILE = 'product_input.json'; // 제품 입력 저장 파일
+
+// 제품명 로딩 공통 함수 (강건한 버전)
+function loadProductNames() {
+  let deviceNames = [];
+  
+  try {
+    // 파일 존재 확인
+    if (!fs.existsSync(PRODUCT_INPUT_FILE)) {
+      throw new Error(`Product input file not found: ${PRODUCT_INPUT_FILE}`);
+    }
+    
+    const fileContent = fs.readFileSync(PRODUCT_INPUT_FILE, 'utf8');
+    if (!fileContent.trim()) {
+      throw new Error('Product input file is empty');
+    }
+    
+    const productInputData = JSON.parse(fileContent);
+    
+    // 다양한 필드명 지원
+    const productNames = productInputData.productNames || 
+                        productInputData.deviceNames || 
+                        productInputData.devices || 
+                        productInputData.products;
+    
+    if (productNames && Array.isArray(productNames)) {
+      // 제품명 정리 및 검증
+      deviceNames = productNames
+        .map(name => {
+          if (typeof name === 'string') {
+            return name.trim();
+          } else if (typeof name === 'object' && name.name) {
+            return name.name.trim();
+          }
+          return null;
+        })
+        .filter(name => name && name.length > 0);
+      
+      console.log('[ProductNames] 📝 제품명 로드 성공:', deviceNames);
+    } else {
+      throw new Error('No valid product names found in data');
+    }
+  } catch (error) {
+    console.warn('[ProductNames] ⚠️ 제품명 로드 실패, 기본값 사용:', error.message);
+    // 기본값: Device 1, Device 2, ... Device 10
+    deviceNames = Array.from({ length: 10 }, (_, i) => `Device ${i + 1}`);
+  }
+  
+  // 제품명이 10개 미만이면 기본값으로 채움
+  while (deviceNames.length < 10) {
+    deviceNames.push(`Device ${deviceNames.length + 1}`);
+  }
+  
+  // 제품명이 10개를 초과하면 10개로 제한
+  if (deviceNames.length > 10) {
+    deviceNames = deviceNames.slice(0, 10);
+    console.warn('[ProductNames] ⚠️ 제품명이 10개를 초과하여 10개로 제한:', deviceNames);
+  }
+  
+  console.log('[ProductNames] 📝 최종 사용할 디바이스명:', deviceNames);
+  return deviceNames;
+}
+
 // 시뮬레이션 모드 - backend-websocket-server.js에서 관리
 let SIMULATION_PROC = false;
 
@@ -356,6 +420,9 @@ function saveTotaReportTableToFile(data, channelVoltages = [5.0, 15.0, -15.0, 24
       data.modelName = 'Unknown Model';
     }
     
+    // 제품명 가져오기 (공통 함수 사용)
+    const deviceNames = loadProductNames();
+    
     // inputVolt 검증 및 기본값 설정
     if (!data.inputVolt || !Array.isArray(data.inputVolt)) {
       console.warn('[SaveData] ⚠️ inputVolt가 유효하지 않아 기본값을 사용합니다.');
@@ -465,7 +532,7 @@ function saveTotaReportTableToFile(data, channelVoltages = [5.0, 15.0, -15.0, 24
        // Actual measurement data input
        csvContent += '\n';
        csvContent += `Measurement Results (${voltageName})\n`;
-       csvContent += `Channel,Device 1,Device 2,Device 3,Device 4,Device 5,Device 6,Device 7,Device 8,Device 9,Device 10\n`;
+       csvContent += `Channel,${deviceNames.join(',')}\n`;
       
        // Measurement results for 4 channels
       for (let j = 0; j < 4; j++) {
@@ -504,7 +571,7 @@ function saveTotaReportTableToFile(data, channelVoltages = [5.0, 15.0, -15.0, 24
       // 비교 결과 (G/N)
       csvContent += '\n';
       csvContent += `비교결과 (G=Good, N=Not Good)\n`;
-      csvContent += `채널,Device 1,Device 2,Device 3,Device 4,Device 5,Device 6,Device 7,Device 8,Device 9,Device 10\n`;
+      csvContent += `채널,${deviceNames.join(',')}\n`;
       
       for (let j = 0; j < 4; j++) {
         const channelName = `Channel ${j+1}`;
@@ -526,8 +593,18 @@ function saveTotaReportTableToFile(data, channelVoltages = [5.0, 15.0, -15.0, 24
           }
           
           if (voltageValue && voltageValue !== "-.-") {
-            // "5.2V|G" 형식에서 비교 결과만 추출
-            const comparisonResult = voltageValue.includes('|') ? voltageValue.split('|')[1] : '';
+            // "5.2V|G" 형식에서 비교 결과만 추출 (개선된 로직)
+            let comparisonResult = '';
+            if (voltageValue.includes('|')) {
+              const parts = voltageValue.split('|');
+              comparisonResult = parts.length > 1 ? parts[1].trim() : '';
+            } else if (voltageValue === 'G' || voltageValue === 'N') {
+              // 이미 G/N 형태인 경우
+              comparisonResult = voltageValue;
+            } else {
+              // 숫자만 있는 경우 (예: "5.2") - 기본값으로 G 설정
+              comparisonResult = 'G';
+            }
             csvContent += `${comparisonResult},`;
           } else {
             csvContent += `-,`;
@@ -564,9 +641,22 @@ function saveTotaReportTableToFile(data, channelVoltages = [5.0, 15.0, -15.0, 24
           
           if (voltageValue && voltageValue !== "-.-") {
             totalTests++;
-            if (voltageValue.includes('|G')) {
+            // "5.2V|G" 형식에서 비교 결과만 추출 (개선된 로직)
+            let comparisonResult = '';
+            if (voltageValue.includes('|')) {
+              const parts = voltageValue.split('|');
+              comparisonResult = parts.length > 1 ? parts[1].trim() : '';
+            } else if (voltageValue === 'G' || voltageValue === 'N') {
+              // 이미 G/N 형태인 경우
+              comparisonResult = voltageValue;
+            } else {
+              // 숫자만 있는 경우 (예: "5.2") - 기본값으로 G 설정
+              comparisonResult = 'G';
+            }
+            
+            if (comparisonResult === 'G') {
               passedTests++;
-            } else if (voltageValue.includes('|N')) {
+            } else if (comparisonResult === 'N') {
               failedTests++;
             }
           }
@@ -2465,6 +2555,9 @@ export async function generateFinalDeviceReport(cycleNumber) {
   try {
     console.log(`[FinalDeviceReport] 디바이스별 종합 리포트 생성 시작 - ${cycleNumber} 사이클`);
     
+    // 제품명 가져오기 (공통 함수 사용)
+    const deviceNames = loadProductNames();
+    
     // ===== 현재 테스트 디렉토리에서만 CSV 파일 검색 =====
     let testDirectoryPath = null;
     
@@ -2515,8 +2608,11 @@ export async function generateFinalDeviceReport(cycleNumber) {
       const testDirFiles = fs.readdirSync(testDirectoryPath);
       console.log(`[FinalDeviceReport] 📁 테스트 디렉토리 파일 목록:`, testDirFiles);
       
-      const testDirCsvFiles = testDirFiles.filter(file => file.endsWith('.csv') && file.includes('Cycle'));
-      console.log(`[FinalDeviceReport] 📁 Cycle이 포함된 CSV 파일:`, testDirCsvFiles);
+      const testDirCsvFiles = testDirFiles.filter(file => 
+        file.endsWith('.csv') && 
+        (file.includes('Cycle') || file.includes('TimeMode') || file.includes('Test'))
+      );
+      console.log(`[FinalDeviceReport] 📁 테스트 관련 CSV 파일:`, testDirCsvFiles);
       
       allCsvFiles.push(...testDirCsvFiles.map(file => ({ file, directory: '' })));
       
@@ -2537,10 +2633,11 @@ export async function generateFinalDeviceReport(cycleNumber) {
     
     console.log(`[FinalDeviceReport] 검색된 디렉토리: ${csvFiles.map(f => f.directory || 'current_test_dir').join(', ')}`);
     
-    // 디바이스별 G/N 카운트 초기화 (10개 디바이스, 4개 채널)
+    // 디바이스별 G/N 카운트 초기화 (제품명 사용)
     const deviceResults = {};
-    for (let device = 1; device <= 10; device++) {
-      deviceResults[`Device ${device}`] = {
+    for (let device = 0; device < deviceNames.length; device++) {
+      const deviceName = deviceNames[device];
+      deviceResults[deviceName] = {
         totalTests: 0,
         passedTests: 0,
         failedTests: 0,
@@ -2552,6 +2649,8 @@ export async function generateFinalDeviceReport(cycleNumber) {
         }
       };
     }
+    
+    console.log(`[FinalDeviceReport] 디바이스 결과 초기화 완료:`, Object.keys(deviceResults));
     
     // 채널명 매핑 함수
     const getChannelName = (channelIndex) => {
@@ -2606,58 +2705,130 @@ export async function generateFinalDeviceReport(cycleNumber) {
           : path.join(testDirectoryPath, filename);
         const fileContent = fs.readFileSync(filePath, 'utf8');
         
-        // 파일명에서 사이클 번호와 테스트 유형 추출
+        // 파일명에서 사이클 번호와 테스트 유형 추출 (개선된 패턴 매칭)
         console.log(`[FinalDeviceReport] 파일명 분석 중: ${filename}`);
-        const cycleMatch = filename.match(/Cycle(\d+)/);
-        const testTypeMatch = filename.match(/(HighTemp_Test\d+|LowTemp_Test\d+|TimeMode_Test\d+|TimeMode_high_temp_Test\d+|TimeMode_low_temp_Test\d+|TimeMode.*Test\d+)/);
+        
+        // 더 유연한 패턴 매칭
+        const cycleMatch = filename.match(/Cycle(\d+)/i) || filename.match(/cycle(\d+)/i);
+        const testTypeMatch = filename.match(/(HighTemp_Test\d+|LowTemp_Test\d+|TimeMode_Test\d+|TimeMode_high_temp_Test\d+|TimeMode_low_temp_Test\d+|TimeMode.*Test\d+|Test\d+)/i);
         
         console.log(`[FinalDeviceReport] Cycle 매치 결과:`, cycleMatch);
         console.log(`[FinalDeviceReport] TestType 매치 결과:`, testTypeMatch);
         
-        if (!cycleMatch || !testTypeMatch) {
-          console.warn(`[FinalDeviceReport] 파일명 형식 오류: ${filename}`);
-          console.warn(`[FinalDeviceReport] 예상 형식: Cycle숫자_TimeMode_high_temp_Test숫자 또는 Cycle숫자_TimeMode_low_temp_Test숫자`);
-          continue;
+        // 사이클 매치가 없어도 계속 진행 (TimeMode 테스트의 경우)
+        if (!testTypeMatch) {
+          console.warn(`[FinalDeviceReport] 파일명에서 테스트 유형을 찾을 수 없음: ${filename}`);
+          console.warn(`[FinalDeviceReport] 예상 형식: Cycle숫자_TimeMode_high_temp_Test숫자 또는 TimeMode_Test숫자`);
+          // 테스트 유형이 없어도 파일을 분석해보기
         }
         
-        const cycle = parseInt(cycleMatch[1]);
-        const testType = testTypeMatch[1];
+        const cycle = cycleMatch ? parseInt(cycleMatch[1]) : 1; // 기본값 1
+        const testType = testTypeMatch ? testTypeMatch[1] : 'Unknown';
         
         //console.log(`[FinalDeviceReport] 분석 중: ${filename} (사이클 ${cycle}, ${testType})`);
         
         // CSV 내용에서 G/N 결과 추출
         const lines = fileContent.split('\n');
         let inComparisonSection = false;
+        let inMeasurementSection = false;
         let channelIndex = 0;
         let sectionCount = 0;
         
         //console.log(`[FinalDeviceReport] ${filename} 분석 시작 - 총 ${lines.length}줄`);
         
         for (const line of lines) {
-          if (line.includes('비교결과 (G=Good, N=Not Good)') || line.includes('Result (G=Good, N=Not Good)')) {
-            inComparisonSection = true;
-            channelIndex = 0;
-            sectionCount++;
-            console.log(`[FinalDeviceReport] 비교결과 섹션 ${sectionCount} 발견: ${filename}`);
+          const trimmedLine = line.trim();
+          
+          // 측정 결과 섹션 시작 감지 (이 섹션은 건너뛰기)
+          if (trimmedLine.includes('Measurement Results') || trimmedLine.includes('측정 결과')) {
+            inMeasurementSection = true;
+            inComparisonSection = false;
+            console.log(`[FinalDeviceReport] 측정 결과 섹션 발견 (건너뛰기): ${trimmedLine}`);
             continue;
           }
           
-          if (inComparisonSection && line.startsWith('Channel')) {
+          // 비교결과 섹션 시작 감지 (G/N 결과만 처리)
+          if ((trimmedLine.includes('Result') && trimmedLine.includes('G=Good')) || 
+              trimmedLine.includes('비교결과') || 
+              (trimmedLine.includes('G=Good') && trimmedLine.includes('N=Not Good'))) {
+            inComparisonSection = true;
+            inMeasurementSection = false;
+            channelIndex = 0;
+            sectionCount++;
+            console.log(`[FinalDeviceReport] 비교결과 섹션 ${sectionCount} 발견: ${filename}`);
+            console.log(`[FinalDeviceReport] 섹션 시작 라인: ${trimmedLine}`);
+            continue;
+          }
+          
+          // 측정 결과 섹션이면 건너뛰기
+          if (inMeasurementSection) {
+            continue;
+          }
+          
+          if (inComparisonSection && (trimmedLine.startsWith('Channel') || trimmedLine.startsWith('채널') || trimmedLine.startsWith('CH'))) {
+            // 헤더 라인 감지 (정확한 패턴 매칭)
+            // 헤더는 "Channel, PL2222, PL2233, ..." 형태여야 함
+            const isHeaderLine = trimmedLine.match(/^(Channel|채널|CH)\s*,/i) && 
+                                trimmedLine.split(',').length > 5 &&
+                                !trimmedLine.includes('(') && // "Channel 1 (24V)" 같은 실제 데이터가 아님
+                                !trimmedLine.match(/\d+\.\d+V/); // "4.99V" 같은 측정값이 아님
+            
+            if (isHeaderLine) {
+              console.log(`[FinalDeviceReport] 헤더 라인 건너뛰기: ${trimmedLine}`);
+              continue;
+            }
+            
+            // 빈 라인이나 유효하지 않은 데이터 건너뛰기
+            if (!trimmedLine || trimmedLine.split(',').length < 2) {
+              console.log(`[FinalDeviceReport] 빈 라인 또는 유효하지 않은 데이터 건너뛰기: ${trimmedLine}`);
+              continue;
+            }
+            
+            // 채널 데이터 라인 감지 (G/N 결과만 처리)
+            // "Channel 1, G, -, -, ..." 형태의 라인만 처리
+            const channelMatch = trimmedLine.match(/^(Channel|채널|CH)\s+(\d+)/i);
+            if (!channelMatch) {
+              console.log(`[FinalDeviceReport] 채널 라인이 아님, 건너뛰기: ${trimmedLine}`);
+              continue;
+            }
+            
+            // 측정값이 포함된 라인은 건너뛰기 (예: "Channel 1 (24V), 4.99V, ...")
+            if (trimmedLine.includes('(') || trimmedLine.match(/\d+\.\d+V/)) {
+              console.log(`[FinalDeviceReport] 측정값이 포함된 라인 건너뛰기: ${trimmedLine}`);
+              continue;
+            }
+            
             const channelName = getChannelName(channelIndex);
-            const results = line.split(',').slice(1); // Device 1~10 결과
+            const results = trimmedLine.split(',').slice(1).map(r => r.trim()); // 제품명들 결과
             
             console.log(`[FinalDeviceReport] 섹션 ${sectionCount} 채널 ${channelIndex + 1} 분석: ${channelName}, 결과 수: ${results.length}`);
             console.log(`[FinalDeviceReport] 결과 데이터:`, results);
+            console.log(`[FinalDeviceReport] 예상 제품명:`, deviceNames);
             
-            for (let deviceIndex = 0; deviceIndex < Math.min(10, results.length); deviceIndex++) {
-              const deviceName = `Device ${deviceIndex + 1}`;
+            // 결과 수와 제품명 수가 일치하는지 확인
+            const expectedDeviceCount = Math.min(10, deviceNames.length);
+            const actualResultCount = results.length;
+            
+            if (actualResultCount < expectedDeviceCount) {
+              console.warn(`[FinalDeviceReport] 결과 수(${actualResultCount})가 예상 제품명 수(${expectedDeviceCount})보다 적음`);
+            }
+            
+            // 결과 데이터와 제품명을 매핑 (더 안전한 처리)
+            for (let deviceIndex = 0; deviceIndex < Math.min(expectedDeviceCount, actualResultCount); deviceIndex++) {
+              const deviceName = deviceNames[deviceIndex] || `Device ${deviceIndex + 1}`;
               const result = results[deviceIndex];
               
-              if (result && (result === 'G' || result === 'N')) {
-                console.log(`[FinalDeviceReport] ${deviceName} ${channelName}: ${result} - 업데이트 중`);
-                safeUpdateChannel(deviceName, channelName, result);
-              } else if (result && result !== '-') {
-                console.log(`[FinalDeviceReport] ${deviceName} ${channelName}: 알 수 없는 결과값 '${result}'`);
+              // 결과값 검증 및 정리 (더 포괄적인 처리)
+              const cleanResult = result ? result.trim().toUpperCase() : '';
+              
+              if (cleanResult === 'G' || cleanResult === 'GOOD') {
+                console.log(`[FinalDeviceReport] ${deviceName} ${channelName}: G - 업데이트 중`);
+                safeUpdateChannel(deviceName, channelName, 'G');
+              } else if (cleanResult === 'N' || cleanResult === 'NOT GOOD' || cleanResult === 'BAD') {
+                console.log(`[FinalDeviceReport] ${deviceName} ${channelName}: N - 업데이트 중`);
+                safeUpdateChannel(deviceName, channelName, 'N');
+              } else if (cleanResult && cleanResult !== '-' && cleanResult !== '') {
+                console.log(`[FinalDeviceReport] ${deviceName} ${channelName}: 알 수 없는 결과값 '${cleanResult}'`);
               } else {
                 console.log(`[FinalDeviceReport] ${deviceName} ${channelName}: 빈 값 또는 '-' - 스킵`);
               }
@@ -2666,7 +2837,7 @@ export async function generateFinalDeviceReport(cycleNumber) {
             
             if (channelIndex >= 4) {
               inComparisonSection = false;
-              //console.log(`[FinalDeviceReport] 섹션 ${sectionCount} 완료: ${filename}`);
+              console.log(`[FinalDeviceReport] 섹션 ${sectionCount} 완료: ${filename}`);
             }
           }
         }
@@ -2725,10 +2896,25 @@ export async function generateFinalDeviceReport(cycleNumber) {
     
     console.log(`[FinalDeviceReport] 최종 결론 생성 완료: ${Object.keys(finalConclusions).length}개 디바이스`);
     
-    // finalConclusions가 비어있으면 경고
+    // finalConclusions가 비어있으면 경고 및 상세 디버깅
     if (Object.keys(finalConclusions).length === 0) {
       console.warn(`[FinalDeviceReport] ⚠️ 최종 결론이 비어있음 - 모든 디바이스의 totalTests가 0`);
       console.warn(`[FinalDeviceReport] ⚠️ CSV 파일에서 데이터를 제대로 읽지 못했을 가능성`);
+      
+      // 상세 디버깅 정보 출력
+      console.log(`[FinalDeviceReport] 🔍 디버깅 정보:`);
+      console.log(`[FinalDeviceReport] - 처리된 파일 수: ${processedFiles}`);
+      console.log(`[FinalDeviceReport] - 총 CSV 파일 수: ${csvFiles.length}`);
+      console.log(`[FinalDeviceReport] - 디바이스 수: ${Object.keys(deviceResults).length}`);
+      
+      for (const [deviceName, results] of Object.entries(deviceResults)) {
+        console.log(`[FinalDeviceReport] - ${deviceName}: totalTests=${results.totalTests}, passedTests=${results.passedTests}, failedTests=${results.failedTests}`);
+        for (const [channelName, channelResult] of Object.entries(results.channels)) {
+          if (channelResult.total > 0) {
+            console.log(`[FinalDeviceReport]   - ${channelName}: total=${channelResult.total}, passed=${channelResult.passed}, failed=${channelResult.failed}`);
+          }
+        }
+      }
     }
     
     // 종합 리포트 파일 생성
@@ -2737,17 +2923,41 @@ export async function generateFinalDeviceReport(cycleNumber) {
     // ===== 전역 변수에서 테스트 디렉토리명 사용 (새로 생성하지 않음) =====
     let dateDirectoryName = currentTestDirectoryName;
 
-    // ===== 전역 변수에서 테스트 디렉토리 경로 사용 =====
+    // ===== 테스트 디렉토리 경로 찾기 로직 개선 =====
     let dateFolderPath = null;
     
-    if (currentTestDirectoryPath) {
-      // 전역 변수에서 테스트 디렉토리 경로 사용
+    // 1. 전역 변수에서 테스트 디렉토리 경로 확인
+    if (currentTestDirectoryPath && fs.existsSync(currentTestDirectoryPath)) {
       dateFolderPath = currentTestDirectoryPath;
       console.log(`[FinalDeviceReport] 📁 전역 변수에서 테스트 디렉토리 경로 사용: ${dateFolderPath}`);
     } else {
-      // 전역 변수가 없으면 기본 경로 사용
-      dateFolderPath = path.join(process.cwd(), 'Data', 'default');
-      console.log(`[FinalDeviceReport] 📁 기본 테스트 디렉토리 경로 사용: ${dateFolderPath}`);
+      // 2. 전역 변수가 없거나 경로가 존재하지 않으면 Data 폴더에서 최신 디렉토리 찾기
+      const dataDir = path.join(process.cwd(), 'Data');
+      if (fs.existsSync(dataDir)) {
+        try {
+          const dirs = fs.readdirSync(dataDir, { withFileTypes: true })
+            .filter(dirent => dirent.isDirectory())
+            .map(dirent => dirent.name)
+            .sort()
+            .reverse(); // 최신 순으로 정렬
+          
+          if (dirs.length > 0) {
+            dateFolderPath = path.join(dataDir, dirs[0]);
+            console.log(`[FinalDeviceReport] 📁 Data 폴더에서 최신 디렉토리 사용: ${dateFolderPath}`);
+          } else {
+            dateFolderPath = path.join(dataDir, 'default');
+            console.log(`[FinalDeviceReport] 📁 Data 폴더에 디렉토리가 없어 기본 경로 사용: ${dateFolderPath}`);
+          }
+        } catch (error) {
+          console.error(`[FinalDeviceReport] ❌ Data 폴더 읽기 실패:`, error.message);
+          dateFolderPath = path.join(process.cwd(), 'Data', 'default');
+          console.log(`[FinalDeviceReport] 📁 오류 발생으로 기본 경로 사용: ${dateFolderPath}`);
+        }
+      } else {
+        // 3. Data 폴더도 없으면 기본 경로 사용
+        dateFolderPath = path.join(process.cwd(), 'Data', 'default');
+        console.log(`[FinalDeviceReport] 📁 Data 폴더가 없어 기본 경로 사용: ${dateFolderPath}`);
+      }
     }
     
     const reportFilePath = path.join(dateFolderPath, reportFilename);

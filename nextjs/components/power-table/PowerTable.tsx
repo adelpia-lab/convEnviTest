@@ -8,6 +8,7 @@ interface PowerTableProps {
   wsConnection?: WebSocket | null;
   channelVoltages?: number[]; // 채널 전압 설정 추가
   selectedDevices?: number[]; // 선택된 디바이스 인덱스 배열
+  productNames?: string[]; // 제품명 배열 추가
 }
 
 interface VoltageData {
@@ -35,10 +36,15 @@ interface AccumulatedTableData {
   };
 }
 
-export default function PowerTable({ groups, wsConnection, channelVoltages = [5, 15, -15, 24], selectedDevices = [0] }: PowerTableProps) {
+export default function PowerTable({ groups, wsConnection, channelVoltages = [5, 15, -15, 24], selectedDevices = [0], productNames = [] }: PowerTableProps) {
   // 디버깅을 위한 로그
   console.log('🔌 PowerTable: 컴포넌트 렌더링, channelVoltages:', channelVoltages);
   console.log('🔌 PowerTable: 선택된 디바이스:', selectedDevices);
+  console.log('🔌 PowerTable: 제품명:', productNames);
+  
+  // 제품명 상태 관리
+  const [deviceNames, setDeviceNames] = useState<string[]>([]);
+  
   // 누적 전압 데이터 상태
   const [accumulatedVoltageData, setAccumulatedVoltageData] = useState<AccumulatedTableData>({});
   
@@ -312,6 +318,69 @@ export default function PowerTable({ groups, wsConnection, channelVoltages = [5,
       }));
     }
   }, [selectedDevices, accumulatedVoltageData]);
+  
+  // 제품명 로드 및 업데이트
+  useEffect(() => {
+    const loadProductNames = () => {
+      try {
+        // props로 전달받은 productNames가 있으면 사용
+        if (productNames && productNames.length > 0) {
+          console.log('🔌 PowerTable: props에서 제품명 로드:', productNames);
+          setDeviceNames(productNames);
+          return;
+        }
+        
+        // localStorage에서 제품명 로드
+        if (typeof window !== 'undefined') {
+          const stored = localStorage.getItem('productInput');
+          if (stored) {
+            const productData = JSON.parse(stored);
+            if (productData.productNames && Array.isArray(productData.productNames)) {
+              console.log('🔌 PowerTable: localStorage에서 제품명 로드:', productData.productNames);
+              setDeviceNames(productData.productNames);
+              return;
+            }
+          }
+        }
+        
+        // 기본값 사용 (dev01, dev02, ...)
+        const defaultNames = Array.from({ length: 10 }, (_, i) => `dev${String(i + 1).padStart(2, '0')}`);
+        console.log('🔌 PowerTable: 기본 제품명 사용:', defaultNames);
+        setDeviceNames(defaultNames);
+      } catch (error) {
+        console.error('🔌 PowerTable: 제품명 로드 오류:', error);
+        // 오류 시 기본값 사용
+        const defaultNames = Array.from({ length: 10 }, (_, i) => `dev${String(i + 1).padStart(2, '0')}`);
+        setDeviceNames(defaultNames);
+      }
+    };
+    
+    loadProductNames();
+  }, [productNames]);
+
+  // localStorage 변경 감지 (다른 탭에서 제품명이 변경된 경우)
+  useEffect(() => {
+    const handleStorageChange = (event) => {
+      if (event.key === 'productInput') {
+        try {
+          if (event.newValue) {
+            const productData = JSON.parse(event.newValue);
+            if (productData.productNames && Array.isArray(productData.productNames)) {
+              console.log('🔌 PowerTable: localStorage 변경 감지 - 제품명 업데이트:', productData.productNames);
+              setDeviceNames(productData.productNames);
+            }
+          }
+        } catch (error) {
+          console.error('🔌 PowerTable: localStorage 변경 처리 오류:', error);
+        }
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', handleStorageChange);
+      return () => window.removeEventListener('storage', handleStorageChange);
+    }
+  }, []);
   
   // 컴포넌트 마운트 시 초기 상태 강제 설정
   useEffect(() => {
@@ -1253,7 +1322,9 @@ export default function PowerTable({ groups, wsConnection, channelVoltages = [5,
               <th className="px-1 py-0" style={{ width: '8%', fontSize: '16px', height: '36px' }}>입력</th>
               <th className="px-1 py-0" style={{ width: '8%', fontSize: '16px', height: '36px' }}>출력</th>
               {Array.from({ length: 10 }, (_, i) => (
-                <th key={i} className="px-1 py-0" style={{ width: '6%', fontSize: '16px', height: '36px' }}>dev{String(i+1).padStart(2,'0')}</th>
+                <th key={i} className="px-1 py-0" style={{ width: '6%', fontSize: '16px', height: '36px' }}>
+                  {deviceNames[i] || `dev${String(i+1).padStart(2,'0')}`}
+                </th>
               ))}
               <th className="px-1 py-0" style={{ width: '8%', fontSize: '16px', height: '36px' }}>GOOD</th>
             </tr>

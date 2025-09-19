@@ -93,6 +93,7 @@ const [voltages, setVoltages] = useState([0, 0, 0, 0, 0]);
 const [temperature, setTemperature] = useState(null);
 const [isWaitingChamberResponse, setIsWaitingChamberResponse] = useState(false);
 const [channelVoltages, setChannelVoltages] = useState([5, 15, -15, 24]); // 기본값 설정
+const [productNames, setProductNames] = useState([]); // 제품명 상태 추가
 const [isTimeModePopupOpen, setIsTimeModePopupOpen] = useState(false);
 const [isMeasurementActive, setIsMeasurementActive] = useState(false);
 const [hasUserInteracted, setHasUserInteracted] = useState(false);
@@ -116,8 +117,40 @@ const hideTimeProgressWindow = () => {
   setTestStartTime(null);
 };
 
-// 디버깅을 위한 로그
+  // 디버깅을 위한 로그
 console.log('🔌 Main: channelVoltages 상태:', channelVoltages);
+console.log('🔌 Main: productNames 상태:', productNames);
+
+// 제품명 로드 useEffect
+useEffect(() => {
+  const loadProductNames = () => {
+    try {
+      if (typeof window !== 'undefined') {
+        const stored = localStorage.getItem('productInput');
+        if (stored) {
+          const productData = JSON.parse(stored);
+          if (productData.productNames && Array.isArray(productData.productNames)) {
+            console.log('📥 Main: localStorage에서 제품명 로드:', productData.productNames);
+            setProductNames(productData.productNames);
+            return;
+          }
+        }
+      }
+      
+      // 기본값 사용
+      const defaultNames = ['PL2222', 'PL2233', 'PL2244', 'PL2255', 'PL2266', 'PL2277', 'PL2288', 'PL2299', 'PL2300', 'PL2311'];
+      console.log('📥 Main: 기본 제품명 사용:', defaultNames);
+      setProductNames(defaultNames);
+    } catch (error) {
+      console.error('📥 Main: 제품명 로드 오류:', error);
+      // 오류 시 기본값 사용
+      const defaultNames = ['PL2222', 'PL2233', 'PL2244', 'PL2255', 'PL2266', 'PL2277', 'PL2288', 'PL2299', 'PL2300', 'PL2311'];
+      setProductNames(defaultNames);
+    }
+  };
+  
+  loadProductNames();
+}, []); // 컴포넌트 마운트 시 한 번만 실행
 
   // WebSocket 연결 상태 확인 함수
   const isWebSocketReady = () => {
@@ -163,6 +196,12 @@ const handleWebSocketMessage = (event) => {
         if (typeof window !== 'undefined') {
           localStorage.setItem('productInput', JSON.stringify(productData));
           // console.log('💾 Product input saved to localStorage from server:', productData);
+        }
+        
+        // 제품명 상태 업데이트
+        if (productData.productNames && Array.isArray(productData.productNames)) {
+          setProductNames(productData.productNames);
+          console.log('📥 Product names updated in main component from SAVE_PRODUCT_INPUT:', productData.productNames);
         }
         
         // 성공 메시지를 ProductInput 컴포넌트로 전송
@@ -382,6 +421,12 @@ const handleWebSocketMessage = (event) => {
         if (typeof window !== 'undefined') {
           localStorage.setItem('productInput', JSON.stringify(productData));
           // console.log('💾 Product input saved to localStorage from server:', productData);
+        }
+        
+        // 제품명 상태 업데이트
+        if (productData.productNames && Array.isArray(productData.productNames)) {
+          setProductNames(productData.productNames);
+          console.log('📥 Product names updated in main component:', productData.productNames);
         }
         
         // 성공 메시지를 ProductInput 컴포넌트로 전송
@@ -868,6 +913,7 @@ const sendMessage = () => {
               wsConnection={ws.current} 
               channelVoltages={channelVoltages} // 동적으로 받은 channelVoltages 설정값
               selectedDevices={selectedDevices} // 선택된 디바이스 인덱스 배열
+              productNames={productNames} // 제품명 배열
             />
             {/* 디버깅용 정보 표시 - 숨김 처리 */}
             {/* <div style={{ 
